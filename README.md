@@ -5,15 +5,13 @@ Minimal macOS CLI for controlling MacBook battery charging over the Apple SMC.
 ## Install
 
 ```bash
-brew install maximbilan/zatt/zatt
-```
-
-If you prefer to add the tap explicitly from the same repo:
-
-```bash
 brew tap maximbilan/zatt https://github.com/maximbilan/zatt
 brew install maximbilan/zatt/zatt
 ```
+
+Homebrew's `brew install user/repo/formula` shorthand only works when the GitHub
+repository is named `homebrew-<repo>`. Because this project lives in
+`maximbilan/zatt`, the explicit `brew tap ... <URL>` form is required.
 
 ## Usage
 
