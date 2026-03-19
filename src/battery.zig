@@ -3,6 +3,17 @@ const smc = @import("smc.zig");
 const c = smc.c;
 
 const menu_bar_note = "menu bar icon can lag by 1-2 min after a real battery current change";
+const fast_observation_interval_ms: u32 = 250;
+const fast_observation_max_wait_ms: u32 = 750;
+const wait_observation_interval_ms: u32 = 1000;
+const wait_observation_max_wait_ms: u32 = 120_000;
+const watch_refresh_ns = std.time.ns_per_s;
+const charge_bar_width: usize = 10;
+const max_percent: i64 = 100;
+const overview_buffer_size = 2048;
+const debug_buffer_size = 4096;
+const raw_status_buffer_size = 8192;
+const verification_buffer_size = 1024;
 
 pub const Error = smc.Error || error{
     BatteryNotFound,
@@ -72,12 +83,6 @@ const ChargeLimitProbe = struct {
     interpreted_limit: u8,
 };
 
-const SmcProbeStatus = enum {
-    ok,
-    key_not_found,
-    read_failed,
-};
-
 const VerificationAction = enum {
     disable,
     enable,
@@ -124,7 +129,7 @@ pub fn status() Error!void {
     var session = try smc.Session.open();
     defer session.close();
     const state = try readBatteryState(&session);
-    try writeBatteryOverview("Battery Status", state, false);
+    try printBatteryOverview("Battery Status", state);
 }
 
 pub fn debug() Error!void {
@@ -132,7 +137,7 @@ pub fn debug() Error!void {
     defer session.close();
     const state = try readBatteryState(&session);
 
-    var buffer: [4096]u8 = undefined;
+    var buffer: [debug_buffer_size]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buffer);
     const writer = stream.writer();
 
@@ -165,20 +170,20 @@ pub fn debug() Error!void {
     if (charging_current) |current| {
         writer.print("{d} mA\n", .{current}) catch unreachable;
     }
-    writer.print("  Fully charged: {s}\n", .{yesNo(state.registry.fully_charged orelse (state.power.percent == 100))}) catch unreachable;
-    writer.print("  Plugged in:    {s}\n", .{yesNo(state.registry.external_connected orelse state.power.plugged_in)}) catch unreachable;
+    writer.print("  Fully charged: {s}\n", .{yesNo(stateIsFullyCharged(state))}) catch unreachable;
+    writer.print("  Plugged in:    {s}\n", .{yesNo(stateIsPluggedIn(state))}) catch unreachable;
 
     writer.writeAll("  Verdict:       ") catch unreachable;
     writer.writeAll(debugVerdict(
         state.actual_charging,
-        state.registry.fully_charged orelse false,
+        stateIsFullyCharged(state),
         state.power.percent,
         state.charging_inhibit.inhibited,
     )) catch unreachable;
     writer.writeAll("\n") catch unreachable;
 
     writer.print("  Menu bar note: {s}\n", .{menu_bar_note}) catch unreachable;
-    if ((state.registry.fully_charged orelse false) or state.power.percent == 100) {
+    if (stateIsFullyCharged(state)) {
         writer.writeAll("  Test note:     at 100% this does not prove inhibit works; discharge below 95% and rerun\n") catch unreachable;
     }
 
@@ -193,7 +198,7 @@ pub fn watch() Error!void {
 
         const state = try readBatteryState(&session);
 
-        var buffer: [2048]u8 = undefined;
+        var buffer: [overview_buffer_size]u8 = undefined;
         var stream = std.io.fixedBufferStream(&buffer);
         const writer = stream.writer();
 
@@ -209,7 +214,7 @@ pub fn watch() Error!void {
         writer.writeAll("══════════════════════════════\n") catch unreachable;
 
         std.fs.File.stdout().writeAll(stream.getWritten()) catch return error.OutputFailed;
-        std.Thread.sleep(std.time.ns_per_s);
+        std.Thread.sleep(watch_refresh_ns);
     }
 }
 
@@ -219,7 +224,7 @@ pub fn rawStatus() Error!void {
 
     const state = try readBatteryState(&session);
 
-    var buffer: [8192]u8 = undefined;
+    var buffer: [raw_status_buffer_size]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buffer);
     const writer = stream.writer();
 
@@ -284,8 +289,8 @@ fn readBatteryState(session: *smc.Session) Error!BatteryState {
     };
 }
 
-fn writeBatteryOverview(title: []const u8, state: BatteryState, watch_mode: bool) Error!void {
-    var buffer: [2048]u8 = undefined;
+fn printBatteryOverview(title: []const u8, state: BatteryState) Error!void {
+    var buffer: [overview_buffer_size]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buffer);
     const writer = stream.writer();
 
@@ -293,9 +298,7 @@ fn writeBatteryOverview(title: []const u8, state: BatteryState, watch_mode: bool
     writer.print("  {s}\n", .{title}) catch unreachable;
     writer.writeAll("══════════════════════════════\n") catch unreachable;
     writeBatteryOverviewBody(writer, state);
-    if (!watch_mode) {
-        writer.writeAll("══════════════════════════════\n") catch unreachable;
-    }
+    writer.writeAll("══════════════════════════════\n") catch unreachable;
 
     std.fs.File.stdout().writeAll(stream.getWritten()) catch return error.OutputFailed;
 }
@@ -303,7 +306,7 @@ fn writeBatteryOverview(title: []const u8, state: BatteryState, watch_mode: bool
 fn writeBatteryOverviewBody(writer: anytype, state: BatteryState) void {
     const filled = chargeBarSegments(state.power.percent);
     writer.writeAll("  Charge:           ") catch unreachable;
-    for (0..10) |index| {
+    for (0..charge_bar_width) |index| {
         writer.writeAll(if (index < filled) "█" else "░") catch unreachable;
     }
     writer.print(" {d}%\n", .{state.power.percent}) catch unreachable;
@@ -320,7 +323,7 @@ fn writeBatteryOverviewBody(writer: anytype, state: BatteryState) void {
     writer.print("  SMC inhibit:      {s}\n", .{
         if (state.charging_inhibit.inhibited) "enabled" else "disabled",
     }) catch unreachable;
-    writer.print("  Plugged in:       {s}\n", .{yesNo(state.registry.external_connected orelse state.power.plugged_in)}) catch unreachable;
+    writer.print("  Plugged in:       {s}\n", .{yesNo(stateIsPluggedIn(state))}) catch unreachable;
     writer.print("  Health:           {s}\n", .{healthSlice(&state.power)}) catch unreachable;
 
     if (state.power.cycles) |cycles| {
@@ -400,23 +403,19 @@ fn powerStateSlice(info: *const PowerSourceInfo) []const u8 {
 }
 
 fn percentage(current_capacity: i64, max_capacity: i64) u8 {
-    const numerator = current_capacity * 100 + @divTrunc(max_capacity, 2);
-    const rounded = @min(@as(i64, 100), @divTrunc(numerator, max_capacity));
+    const numerator = current_capacity * max_percent + @divTrunc(max_capacity, 2);
+    const rounded = @min(max_percent, @divTrunc(numerator, max_capacity));
     return @intCast(rounded);
 }
 
 fn chargeBarSegments(percent: u8) usize {
     if (percent == 0) return 0;
-    return @min(@as(usize, 10), @divTrunc(@as(usize, percent) + 9, 10));
+    return @min(charge_bar_width, @divTrunc(@as(usize, percent) + (charge_bar_width - 1), charge_bar_width));
 }
 
 fn actualChargingLabel(inhibited: bool, is_charging: bool) []const u8 {
     if (inhibited) return "no (inhibited)";
     return if (is_charging) "yes" else "no";
-}
-
-fn readChargingInhibit(session: *smc.Session) smc.Error!bool {
-    return (try probeChargingInhibit(session)).inhibited;
 }
 
 fn probeChargingInhibit(session: *smc.Session) smc.Error!ChargingInhibitProbe {
@@ -455,21 +454,21 @@ fn probeChargingInhibit(session: *smc.Session) smc.Error!ChargingInhibitProbe {
     };
 }
 
-fn writeChargingInhibit(session: *smc.Session, disabled: bool) smc.Error!void {
-    session.writeU8("CH0B", if (disabled) 1 else 0) catch |err| switch (err) {
-        error.KeyNotFound => return writeChargingInhibitFallback(session, disabled),
+fn writeChargingInhibit(session: *smc.Session, inhibited: bool) smc.Error!void {
+    session.writeU8("CH0B", if (inhibited) 1 else 0) catch |err| switch (err) {
+        error.KeyNotFound => return writeChargingInhibitFallback(session, inhibited),
         else => return err,
     };
 }
 
-fn writeChargingInhibitFallback(session: *smc.Session, disabled: bool) smc.Error!void {
-    const tahoe_bytes = if (disabled)
+fn writeChargingInhibitFallback(session: *smc.Session, inhibited: bool) smc.Error!void {
+    const tahoe_bytes = if (inhibited)
         [_]u8{ 1, 0, 0, 0 }
     else
         [_]u8{ 0, 0, 0, 0 };
 
     session.write("CHTE", &tahoe_bytes) catch |err| switch (err) {
-        error.KeyNotFound => try session.writeU8("CH0C", if (disabled) 2 else 0),
+        error.KeyNotFound => try session.writeU8("CH0C", if (inhibited) 2 else 0),
         else => return err,
     };
 }
@@ -502,13 +501,13 @@ fn observeChargingTransition(
 fn observationPlan(wait: bool) ObservationPlan {
     return if (wait)
         .{
-            .interval_ms = 1000,
-            .max_wait_ms = 120_000,
+            .interval_ms = wait_observation_interval_ms,
+            .max_wait_ms = wait_observation_max_wait_ms,
         }
     else
         .{
-            .interval_ms = 250,
-            .max_wait_ms = 750,
+            .interval_ms = fast_observation_interval_ms,
+            .max_wait_ms = fast_observation_max_wait_ms,
         };
 }
 
@@ -520,9 +519,9 @@ fn captureChargingSnapshot(session: *smc.Session) Error!ChargingSnapshot {
         .inhibited = state.charging_inhibit.inhibited,
         .charging_now = state.actual_charging,
         .charging_current = state.registry.charging_current,
-        .fully_charged = state.registry.fully_charged orelse (state.power.percent == 100),
+        .fully_charged = stateIsFullyCharged(state),
         .percent = state.power.percent,
-        .plugged_in = state.registry.external_connected orelse state.power.plugged_in,
+        .plugged_in = stateIsPluggedIn(state),
     };
 }
 
@@ -567,7 +566,7 @@ fn printVerificationResult(
     observation: WriteObservation,
     waited_for_settle: bool,
 ) Error!void {
-    var buffer: [1024]u8 = undefined;
+    var buffer: [verification_buffer_size]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buffer);
     const writer = stream.writer();
     const snapshot = observation.snapshot;
@@ -602,10 +601,6 @@ fn printVerificationResult(
     writer.writeAll("══════════════════════════════\n") catch unreachable;
 
     std.fs.File.stdout().writeAll(stream.getWritten()) catch return error.OutputFailed;
-}
-
-fn readChargeLimit(session: *smc.Session) smc.Error!u8 {
-    return (try probeChargeLimit(session)).interpreted_limit;
 }
 
 fn probeChargeLimit(session: *smc.Session) smc.Error!ChargeLimitProbe {
@@ -804,8 +799,34 @@ fn interpretChargeLimitFallback(raw_value: u8) u8 {
     return if (raw_value == 1) 80 else 100;
 }
 
+fn stateIsFullyCharged(state: BatteryState) bool {
+    return state.registry.fully_charged orelse (state.power.percent == 100);
+}
+
+fn stateIsPluggedIn(state: BatteryState) bool {
+    return state.registry.external_connected orelse state.power.plugged_in;
+}
+
 fn yesNo(value: bool) []const u8 {
     return if (value) "yes" else "no";
+}
+
+fn testSnapshot(
+    inhibited: bool,
+    charging_now: bool,
+    fully_charged: bool,
+    percent: u8,
+    plugged_in: bool,
+) ChargingSnapshot {
+    return .{
+        .key_name = "CHTE",
+        .inhibited = inhibited,
+        .charging_now = charging_now,
+        .charging_current = if (charging_now) 1500 else 0,
+        .fully_charged = fully_charged,
+        .percent = percent,
+        .plugged_in = plugged_in,
+    };
 }
 
 test "percentage rounds and caps at 100" {
@@ -869,74 +890,110 @@ test "charge limit fallback interprets Apple Silicon values" {
 }
 
 test "enable verification waits for charging only when it should" {
-    const unplugged = ChargingSnapshot{
-        .key_name = "CHTE",
-        .inhibited = false,
-        .charging_now = false,
-        .charging_current = 0,
-        .fully_charged = false,
-        .percent = 80,
-        .plugged_in = false,
-    };
+    const unplugged = testSnapshot(false, false, false, 80, false);
     try std.testing.expect(verificationSatisfied(.enable, unplugged));
 
-    const plugged_idle = ChargingSnapshot{
-        .key_name = "CHTE",
-        .inhibited = false,
-        .charging_now = false,
-        .charging_current = 0,
-        .fully_charged = false,
-        .percent = 80,
-        .plugged_in = true,
-    };
+    const plugged_idle = testSnapshot(false, false, false, 80, true);
     try std.testing.expect(!verificationSatisfied(.enable, plugged_idle));
+}
+
+test "disable verification waits for inhibit and charging to stop" {
+    try std.testing.expect(!verificationSatisfied(.disable, testSnapshot(false, true, false, 80, true)));
+    try std.testing.expect(!verificationSatisfied(.disable, testSnapshot(true, true, false, 80, true)));
+    try std.testing.expect(verificationSatisfied(.disable, testSnapshot(true, false, false, 80, true)));
+}
+
+test "shouldExpectCharging only when plugged in and below full" {
+    try std.testing.expect(shouldExpectCharging(testSnapshot(false, false, false, 80, true)));
+    try std.testing.expect(!shouldExpectCharging(testSnapshot(false, false, false, 80, false)));
+    try std.testing.expect(!shouldExpectCharging(testSnapshot(false, false, true, 80, true)));
+    try std.testing.expect(!shouldExpectCharging(testSnapshot(false, false, false, 100, true)));
 }
 
 test "verification results explain post-write battery state" {
     try std.testing.expectEqualStrings(
         "battery current resumed",
-        verificationResult(.enable, .{
-            .key_name = "CHTE",
-            .inhibited = false,
-            .charging_now = true,
-            .charging_current = 1500,
-            .fully_charged = false,
-            .percent = 80,
-            .plugged_in = true,
-        }, true),
+        verificationResult(.enable, testSnapshot(false, true, false, 80, true), true),
     );
     try std.testing.expectEqualStrings(
         "inhibit cleared; AC power is not connected",
-        verificationResult(.enable, .{
-            .key_name = "CHTE",
-            .inhibited = false,
-            .charging_now = false,
-            .charging_current = 0,
-            .fully_charged = false,
-            .percent = 80,
-            .plugged_in = false,
-        }, true),
+        verificationResult(.enable, testSnapshot(false, false, false, 80, false), true),
     );
     try std.testing.expectEqualStrings(
         "battery current stopped and charging inhibit is active",
-        verificationResult(.disable, .{
-            .key_name = "CHTE",
-            .inhibited = true,
-            .charging_now = false,
-            .charging_current = 0,
-            .fully_charged = false,
-            .percent = 80,
-            .plugged_in = true,
-        }, true),
+        verificationResult(.disable, testSnapshot(true, false, false, 80, true), true),
     );
+}
+
+test "verification results cover lagging and full battery cases" {
+    try std.testing.expectEqualStrings(
+        "SMC write returned, but charging inhibit is not reflected yet",
+        verificationResult(.disable, testSnapshot(false, false, false, 80, true), false),
+    );
+    try std.testing.expectEqualStrings(
+        "SMC inhibit is enabled, but battery current is still flowing",
+        verificationResult(.disable, testSnapshot(true, true, false, 80, true), false),
+    );
+    try std.testing.expectEqualStrings(
+        "inhibit cleared; battery is full, so current may stay at 0 mA",
+        verificationResult(.enable, testSnapshot(false, false, true, 100, true), true),
+    );
+    try std.testing.expectEqualStrings(
+        "SMC write returned, but charging inhibit is still enabled",
+        verificationResult(.enable, testSnapshot(true, false, false, 80, true), false),
+    );
+}
+
+test "battery state helpers fall back to power source values" {
+    const base_power = PowerSourceInfo{
+        .current_capacity = 80,
+        .max_capacity = 100,
+        .percent = 80,
+        .is_charging = false,
+        .plugged_in = true,
+        .cycles = null,
+    };
+    const base_registry = RegistryInfo{
+        .current_capacity = null,
+        .max_capacity = null,
+        .cycle_count = null,
+        .charging_current = null,
+        .charger_inhibit_reason = null,
+        .not_charging_reason = null,
+        .is_charging = null,
+        .fully_charged = null,
+        .external_connected = null,
+        .external_charge_capable = null,
+    };
+    const base_inhibit = ChargingInhibitProbe{
+        .key_name = "CHTE",
+        .byte_len = 1,
+        .inhibited = false,
+    };
+
+    var state = BatteryState{
+        .power = base_power,
+        .registry = base_registry,
+        .charging_inhibit = base_inhibit,
+        .charge_limit = null,
+        .actual_charging = false,
+    };
+    try std.testing.expect(stateIsPluggedIn(state));
+    try std.testing.expect(!stateIsFullyCharged(state));
+
+    state.registry.external_connected = false;
+    try std.testing.expect(!stateIsPluggedIn(state));
+
+    state.registry.fully_charged = true;
+    try std.testing.expect(stateIsFullyCharged(state));
 }
 
 test "observation plan keeps default writes fast and wait mode long-lived" {
     const quick = observationPlan(false);
-    try std.testing.expectEqual(@as(u32, 250), quick.interval_ms);
-    try std.testing.expectEqual(@as(u32, 750), quick.max_wait_ms);
+    try std.testing.expectEqual(fast_observation_interval_ms, quick.interval_ms);
+    try std.testing.expectEqual(fast_observation_max_wait_ms, quick.max_wait_ms);
 
     const wait = observationPlan(true);
-    try std.testing.expectEqual(@as(u32, 1000), wait.interval_ms);
-    try std.testing.expectEqual(@as(u32, 120_000), wait.max_wait_ms);
+    try std.testing.expectEqual(wait_observation_interval_ms, wait.interval_ms);
+    try std.testing.expectEqual(wait_observation_max_wait_ms, wait.max_wait_ms);
 }

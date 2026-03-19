@@ -225,3 +225,8 @@ fn smcKey(comptime key_name: []const u8) u32 {
         (@as(u32, key_name[2]) << 8) |
         @as(u32, key_name[3]);
 }
+
+test "smcKey encodes four character keys in big-endian order" {
+    try std.testing.expectEqual(@as(u32, 0x43483042), smcKey("CH0B"));
+    try std.testing.expectEqual(@as(u32, 0x42434c4d), smcKey("BCLM"));
+}
