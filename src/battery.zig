@@ -2,7 +2,6 @@ const std = @import("std");
 const smc = @import("smc.zig");
 const c = smc.c;
 
-const page_allocator = std.heap.page_allocator;
 const menu_bar_note = "menu bar icon can lag by 1-2 min after a real battery current change";
 
 pub const Error = smc.Error || error{
@@ -14,7 +13,6 @@ pub const Error = smc.Error || error{
 
 pub const WriteOptions = struct {
     wait: bool = false,
-    notify: bool = false,
 };
 
 const PowerSourceInfo = struct {
@@ -102,7 +100,6 @@ pub fn disable(options: WriteOptions) Error!void {
     try writeChargingInhibit(&session, true);
     const observation = try observeChargingTransition(&session, .disable, options);
     try printVerificationResult(.disable, observation, options.wait);
-    if (options.notify) sendWriteNotification(.disable, observation);
 }
 
 pub fn enable(options: WriteOptions) Error!void {
@@ -111,7 +108,6 @@ pub fn enable(options: WriteOptions) Error!void {
     try writeChargingInhibit(&session, false);
     const observation = try observeChargingTransition(&session, .enable, options);
     try printVerificationResult(.enable, observation, options.wait);
-    if (options.notify) sendWriteNotification(.enable, observation);
 }
 
 pub fn setLimit(limit: u8) smc.Error!void {
@@ -571,7 +567,7 @@ fn printVerificationResult(
     observation: WriteObservation,
     waited_for_settle: bool,
 ) Error!void {
-    var buffer: [512]u8 = undefined;
+    var buffer: [1024]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buffer);
     const writer = stream.writer();
     const snapshot = observation.snapshot;
@@ -606,63 +602,6 @@ fn printVerificationResult(
     writer.writeAll("══════════════════════════════\n") catch unreachable;
 
     std.fs.File.stdout().writeAll(stream.getWritten()) catch return error.OutputFailed;
-}
-
-fn sendWriteNotification(action: VerificationAction, observation: WriteObservation) void {
-    var uid_buf: [16]u8 = undefined;
-    const target_uid = notificationTargetUid() orelse return;
-    const uid = std.fmt.bufPrint(&uid_buf, "{d}", .{target_uid}) catch return;
-
-    const title = switch (action) {
-        .enable => "zatt enable",
-        .disable => "zatt disable",
-    };
-    const body = notificationBody(action, observation);
-
-    var script_buf: [256]u8 = undefined;
-    const script = std.fmt.bufPrint(
-        &script_buf,
-        "display notification \"{s}\" with title \"{s}\"",
-        .{ body, title },
-    ) catch return;
-
-    const argv = [_][]const u8{
-        "/bin/launchctl",
-        "asuser",
-        uid,
-        "/usr/bin/osascript",
-        "-e",
-        script,
-    };
-
-    var child = std.process.Child.init(&argv, page_allocator);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawnAndWait() catch {};
-}
-
-fn notificationTargetUid() ?u32 {
-    const value = std.process.getEnvVarOwned(page_allocator, "SUDO_UID") catch return null;
-    defer page_allocator.free(value);
-    return std.fmt.parseUnsigned(u32, value, 10) catch null;
-}
-
-fn notificationBody(action: VerificationAction, observation: WriteObservation) []const u8 {
-    if (observation.settled) {
-        return switch (action) {
-            .enable => if (observation.snapshot.charging_now)
-                "Battery current resumed"
-            else
-                "Charging state settled",
-            .disable => "Battery current stopped",
-        };
-    }
-
-    return switch (action) {
-        .enable => "Charging state is still settling",
-        .disable => "Disable state is still settling",
-    };
 }
 
 fn readChargeLimit(session: *smc.Session) smc.Error!u8 {
@@ -1000,39 +939,4 @@ test "observation plan keeps default writes fast and wait mode long-lived" {
     const wait = observationPlan(true);
     try std.testing.expectEqual(@as(u32, 1000), wait.interval_ms);
     try std.testing.expectEqual(@as(u32, 120_000), wait.max_wait_ms);
-}
-
-test "notification body reflects settled and unsettled states" {
-    try std.testing.expectEqualStrings(
-        "Battery current resumed",
-        notificationBody(.enable, .{
-            .snapshot = .{
-                .key_name = "CHTE",
-                .inhibited = false,
-                .charging_now = true,
-                .charging_current = 1500,
-                .fully_charged = false,
-                .percent = 80,
-                .plugged_in = true,
-            },
-            .elapsed_ms = 1000,
-            .settled = true,
-        }),
-    );
-    try std.testing.expectEqualStrings(
-        "Charging state is still settling",
-        notificationBody(.enable, .{
-            .snapshot = .{
-                .key_name = "CHTE",
-                .inhibited = false,
-                .charging_now = false,
-                .charging_current = 0,
-                .fully_charged = false,
-                .percent = 80,
-                .plugged_in = true,
-            },
-            .elapsed_ms = 250,
-            .settled = false,
-        }),
-    );
 }

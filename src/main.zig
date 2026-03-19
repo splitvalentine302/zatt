@@ -8,8 +8,8 @@ const usage_text =
     \\  zatt watch
     \\  zatt debug
     \\  zatt raw-status
-    \\  zatt disable [--wait] [--notify]
-    \\  zatt enable [--wait] [--notify]
+    \\  zatt disable [--wait]
+    \\  zatt enable [--wait]
     \\  zatt limit <20-100>
     \\  zatt limit reset
     \\
@@ -144,10 +144,6 @@ fn parseWriteOptions(args: anytype) ?battery.WriteOptions {
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--wait")) {
             options.wait = true;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "--notify")) {
-            options.notify = true;
             continue;
         }
         return null;

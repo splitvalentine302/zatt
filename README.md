@@ -23,7 +23,7 @@ zatt raw-status
 sudo zatt disable
 sudo zatt disable --wait
 sudo zatt enable
-sudo zatt enable --wait --notify
+sudo zatt enable --wait
 sudo zatt limit 80
 sudo zatt limit reset
 ```
@@ -38,7 +38,6 @@ Write-command options:
 
 - `--wait`: keep polling until the observed battery current settles or the wait
   timeout is reached
-- `--notify`: send a macOS notification with the final observed result
 
 ## Build
 
