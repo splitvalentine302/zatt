@@ -10,6 +10,10 @@ const wait_observation_max_wait_ms: u32 = 120_000;
 const watch_refresh_ns = std.time.ns_per_s;
 const charge_bar_width: usize = 10;
 const max_percent: i64 = 100;
+const apple_silicon_charge_limit: u8 = 80;
+const charge_limit_reset_value: u8 = 100;
+const direct_charge_limit_blocked_macos_major: u32 = 15;
+const max_product_version_len: usize = 32;
 const overview_buffer_size = 2048;
 const debug_buffer_size = 4096;
 const raw_status_buffer_size = 8192;
@@ -17,6 +21,8 @@ const verification_buffer_size = 1024;
 
 pub const Error = smc.Error || error{
     BatteryNotFound,
+    ChargeLimitBlockedByMacOS,
+    ChargeLimitUnsupported,
     InvalidCapacity,
     OutputFailed,
     PowerSourceUnavailable,
@@ -115,14 +121,15 @@ pub fn enable(options: WriteOptions) Error!void {
     try printVerificationResult(.enable, observation, options.wait);
 }
 
-pub fn setLimit(limit: u8) smc.Error!void {
+pub fn setLimit(limit: u8) Error!void {
+    if (isDirectChargeLimitBlockedByMacOS()) return error.ChargeLimitBlockedByMacOS;
     var session = try smc.Session.open();
     defer session.close();
     try writeChargeLimit(&session, limit);
 }
 
-pub fn resetLimit() smc.Error!void {
-    try setLimit(100);
+pub fn resetLimit() Error!void {
+    try setLimit(charge_limit_reset_value);
 }
 
 pub fn status() Error!void {
@@ -624,18 +631,57 @@ fn probeChargeLimit(session: *smc.Session) smc.Error!ChargeLimitProbe {
     };
 }
 
-fn writeChargeLimit(session: *smc.Session, limit: u8) smc.Error!void {
-    session.writeU8("BCLM", limit) catch |err| switch (err) {
-        error.KeyNotFound => {
-            const fallback_value: u8 = switch (limit) {
-                80 => 1,
-                100 => 0,
-                else => return error.KeyNotFound,
+fn writeChargeLimit(session: *smc.Session, limit: u8) Error!void {
+    session.writeU8("BCLM", limit) catch |bclm_err| {
+        switch (bclm_err) {
+            error.KeyNotFound, error.CallFailed, error.InvalidResponse => {},
+            else => return bclm_err,
+        }
+
+        const fallback_value = chargeLimitFallbackValue(limit) orelse {
+            return switch (bclm_err) {
+                error.KeyNotFound => error.ChargeLimitUnsupported,
+                else => bclm_err,
             };
-            try session.writeU8("CHWA", fallback_value);
-        },
-        else => return err,
+        };
+
+        session.writeU8("CHWA", fallback_value) catch |chwa_err| {
+            return switch (chwa_err) {
+                error.KeyNotFound => switch (bclm_err) {
+                    error.KeyNotFound => error.ChargeLimitUnsupported,
+                    else => bclm_err,
+                },
+                else => chwa_err,
+            };
+        };
     };
+}
+
+fn chargeLimitFallbackValue(limit: u8) ?u8 {
+    return switch (limit) {
+        apple_silicon_charge_limit => 1,
+        charge_limit_reset_value => 0,
+        else => null,
+    };
+}
+
+fn isDirectChargeLimitBlockedByMacOS() bool {
+    const major = currentMacOsMajorVersion() orelse return false;
+    return major >= direct_charge_limit_blocked_macos_major;
+}
+
+fn currentMacOsMajorVersion() ?u32 {
+    var buffer = [_]u8{0} ** max_product_version_len;
+    var len: usize = buffer.len;
+    std.posix.sysctlbynameZ("kern.osproductversion", buffer[0..].ptr, &len, null, 0) catch return null;
+    const version = std.mem.sliceTo(buffer[0..@min(len, buffer.len)], 0);
+    return parseProductVersionMajor(version);
+}
+
+fn parseProductVersionMajor(version: []const u8) ?u32 {
+    var parts = std.mem.splitScalar(u8, version, '.');
+    const major = parts.next() orelse return null;
+    return std.fmt.parseInt(u32, major, 10) catch null;
 }
 
 fn dictGetInt(dict: c.CFDictionaryRef, key_name: [*:0]const u8) ?i64 {
@@ -887,6 +933,19 @@ test "charge limit fallback interprets Apple Silicon values" {
     try std.testing.expectEqual(@as(u8, 80), interpretChargeLimitFallback(1));
     try std.testing.expectEqual(@as(u8, 100), interpretChargeLimitFallback(0));
     try std.testing.expectEqual(@as(u8, 100), interpretChargeLimitFallback(2));
+}
+
+test "charge limit fallback values only exist for Apple Silicon supported limits" {
+    try std.testing.expectEqual(@as(?u8, 1), chargeLimitFallbackValue(80));
+    try std.testing.expectEqual(@as(?u8, 0), chargeLimitFallbackValue(100));
+    try std.testing.expectEqual(@as(?u8, null), chargeLimitFallbackValue(60));
+}
+
+test "parseProductVersionMajor handles current macOS version formats" {
+    try std.testing.expectEqual(@as(?u32, 13), parseProductVersionMajor("13.6.7"));
+    try std.testing.expectEqual(@as(?u32, 15), parseProductVersionMajor("15.0"));
+    try std.testing.expectEqual(@as(?u32, 26), parseProductVersionMajor("26.3.1"));
+    try std.testing.expectEqual(@as(?u32, null), parseProductVersionMajor("not-a-version"));
 }
 
 test "enable verification waits for charging only when it should" {

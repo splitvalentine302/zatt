@@ -1,6 +1,5 @@
 const std = @import("std");
 const battery = @import("battery.zig");
-const smc = @import("smc.zig");
 const ArgIterator = std.process.ArgIterator;
 
 const Command = enum {
@@ -21,7 +20,7 @@ const usage_text =
     \\  zatt raw-status
     \\  zatt disable [--wait]
     \\  zatt enable [--wait]
-    \\  zatt limit <20-100>
+    \\  zatt limit <80|100>
     \\  zatt limit reset
     \\
 ;
@@ -81,8 +80,7 @@ fn runLimitCommand(args: *ArgIterator) u8 {
     const limit_arg = args.next() orelse return usageError();
     if (std.mem.eql(u8, limit_arg, "reset")) {
         if (args.next() != null) return usageError();
-        if (!isRoot()) return fail("Error: run with sudo\n", .{});
-        return writeSmcCommand("BCLM", battery.resetLimit);
+        return writeChargeLimitCommand(100);
     }
 
     if (args.next() != null) return usageError();
@@ -90,16 +88,8 @@ fn runLimitCommand(args: *ArgIterator) u8 {
     const limit = std.fmt.parseInt(u8, limit_arg, 10) catch {
         return invalidLimitError();
     };
-    if (limit < 20 or limit > 100) return invalidLimitError();
-    if (!isRoot()) return fail("Error: run with sudo\n", .{});
-
-    battery.setLimit(limit) catch |err| {
-        return switch (err) {
-            error.CannotOpen => fail("Error: cannot open SMC\n", .{}),
-            else => fail("Error: SMC write failed for BCLM\n", .{}),
-        };
-    };
-    return 0;
+    if (limit != 80 and limit != 100) return invalidLimitError();
+    return writeChargeLimitCommand(limit);
 }
 
 fn readOnlyCommand(comptime action: fn () battery.Error!void) u8 {
@@ -112,12 +102,15 @@ fn readOnlyCommand(comptime action: fn () battery.Error!void) u8 {
     return 0;
 }
 
-fn writeSmcCommand(comptime key: []const u8, comptime action: fn () smc.Error!void) u8 {
-    action() catch |err| {
+fn writeChargeLimitCommand(limit: u8) u8 {
+    if (!isRoot()) return fail("Error: run with sudo\n", .{});
+    battery.setLimit(limit) catch |err| {
         return switch (err) {
             error.CannotOpen => fail("Error: cannot open SMC\n", .{}),
             error.NotPrivileged => fail("Error: run with sudo\n", .{}),
-            else => fail("Error: SMC write failed for {s}\n", .{key}),
+            error.ChargeLimitBlockedByMacOS => fail("Error: direct charge-limit writes are blocked on macOS 15+\n", .{}),
+            error.ChargeLimitUnsupported => fail("Error: charge limit is unavailable on this Mac\n", .{}),
+            else => fail("Error: SMC write failed for BCLM/CHWA\n", .{}),
         };
     };
     return 0;
@@ -158,7 +151,7 @@ fn parseWriteOptions(args: *ArgIterator) ?battery.WriteOptions {
 }
 
 fn invalidLimitError() u8 {
-    return fail("Error: limit must be between 20 and 100\n", .{});
+    return fail("Error: on Apple silicon, limit must be 80 or 100\n", .{});
 }
 
 fn usageError() u8 {

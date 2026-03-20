@@ -108,6 +108,8 @@ Write-command options:
 - `status`, `watch`, `debug`, and `raw-status` do not require `sudo`
 - write commands require `sudo` because they talk to privileged SMC interfaces
 - this project targets Apple Silicon Macs on macOS 13+
+- `limit` only accepts `80`, `100`, or `reset` on Apple Silicon
+- direct `BCLM`/`CHWA` charge-limit writes are blocked by macOS 15+ entitlement enforcement
 - battery health text is shown as reported by macOS, for example `Normal`,
   `Check Battery`, or similar platform-specific values
 
