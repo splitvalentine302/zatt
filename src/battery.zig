@@ -10,6 +10,8 @@ const wait_observation_max_wait_ms: u32 = 120_000;
 const watch_refresh_ns = std.time.ns_per_s;
 const charge_bar_width: usize = 10;
 const max_percent: i64 = 100;
+const battery_health_good = "Good";
+const battery_health_normal = "Normal";
 const apple_silicon_charge_limit: u8 = 80;
 const charge_limit_reset_value: u8 = 100;
 const direct_charge_limit_blocked_macos_major: u32 = 15;
@@ -40,6 +42,8 @@ const PowerSourceInfo = struct {
     plugged_in: bool,
     power_source_state: [32]u8 = [_]u8{0} ** 32,
     power_source_state_len: usize = 0,
+    health_condition: [64]u8 = [_]u8{0} ** 64,
+    health_condition_len: usize = 0,
     cycles: ?u32,
     health: [64]u8 = [_]u8{0} ** 64,
     health_len: usize = 0,
@@ -245,7 +249,9 @@ pub fn rawStatus() Error!void {
     writer.print("    Percent:            {d}\n", .{state.power.percent}) catch unreachable;
     writer.print("    IsCharging:         {s}\n", .{yesNo(state.power.is_charging)}) catch unreachable;
     writer.print("    PowerSourceState:   {s}\n", .{powerStateSlice(&state.power)}) catch unreachable;
-    writer.print("    Health:             {s}\n", .{healthSlice(&state.power)}) catch unreachable;
+    writer.print("    Health:             {s}\n", .{displayHealthSlice(&state.power)}) catch unreachable;
+    writeOptionalString(writer, "    BatteryHealth", rawHealthSlice(&state.power));
+    writeOptionalString(writer, "    BatteryHealthCondition", healthConditionSlice(&state.power));
     if (state.power.cycles) |cycles| {
         writer.print("    CycleCount:         {d}\n", .{cycles}) catch unreachable;
     } else {
@@ -331,7 +337,7 @@ fn writeBatteryOverviewBody(writer: anytype, state: BatteryState) void {
         if (state.charging_inhibit.inhibited) "enabled" else "disabled",
     }) catch unreachable;
     writer.print("  Plugged in:       {s}\n", .{yesNo(stateIsPluggedIn(state))}) catch unreachable;
-    writer.print("  Health:           {s}\n", .{healthSlice(&state.power)}) catch unreachable;
+    writer.print("  Health:           {s}\n", .{displayHealthSlice(&state.power)}) catch unreachable;
 
     if (state.power.cycles) |cycles| {
         writer.print("  Cycles:           {d}\n", .{cycles}) catch unreachable;
@@ -385,6 +391,10 @@ fn readPowerSourceInfo() Error!PowerSourceInfo {
         info.plugged_in = std.mem.eql(u8, state, "AC Power");
     }
 
+    if (dictGetString(description, "BatteryHealthCondition", &info.health_condition)) |condition| {
+        info.health_condition_len = condition.len;
+    }
+
     if (dictGetString(description, "BatteryHealth", &info.health)) |health| {
         info.health_len = health.len;
     } else {
@@ -401,8 +411,21 @@ fn readPowerSourceInfo() Error!PowerSourceInfo {
     return info;
 }
 
-fn healthSlice(info: *const PowerSourceInfo) []const u8 {
+fn rawHealthSlice(info: *const PowerSourceInfo) []const u8 {
     return info.health[0..info.health_len];
+}
+
+fn healthConditionSlice(info: *const PowerSourceInfo) []const u8 {
+    return info.health_condition[0..info.health_condition_len];
+}
+
+fn displayHealthSlice(info: *const PowerSourceInfo) []const u8 {
+    const condition = healthConditionSlice(info);
+    if (condition.len > 0) return condition;
+
+    const health = rawHealthSlice(info);
+    if (std.mem.eql(u8, health, battery_health_good)) return battery_health_normal;
+    return health;
 }
 
 fn powerStateSlice(info: *const PowerSourceInfo) []const u8 {
@@ -790,6 +813,14 @@ fn writeMaybeBool(writer: anytype, label: []const u8, value: ?bool) void {
     }
 }
 
+fn writeOptionalString(writer: anytype, label: []const u8, value: []const u8) void {
+    if (value.len > 0) {
+        writer.print("{s}: {s}\n", .{ label, value }) catch unreachable;
+    } else {
+        writer.print("{s}: unavailable\n", .{label}) catch unreachable;
+    }
+}
+
 fn writeSmcProbe(writer: anytype, session: *smc.Session, comptime key_name: []const u8) void {
     const result = session.read(key_name) catch |err| switch (err) {
         error.KeyNotFound => {
@@ -946,6 +977,26 @@ test "parseProductVersionMajor handles current macOS version formats" {
     try std.testing.expectEqual(@as(?u32, 15), parseProductVersionMajor("15.0"));
     try std.testing.expectEqual(@as(?u32, 26), parseProductVersionMajor("26.3.1"));
     try std.testing.expectEqual(@as(?u32, null), parseProductVersionMajor("not-a-version"));
+}
+
+test "displayHealthSlice prefers condition labels and normalizes Good" {
+    var info = PowerSourceInfo{
+        .current_capacity = 0,
+        .max_capacity = 1,
+        .percent = 0,
+        .is_charging = false,
+        .plugged_in = false,
+        .cycles = null,
+    };
+
+    std.mem.copyForwards(u8, info.health[0..battery_health_good.len], battery_health_good);
+    info.health_len = battery_health_good.len;
+    try std.testing.expectEqualStrings(battery_health_normal, displayHealthSlice(&info));
+
+    const condition = "Check Battery";
+    std.mem.copyForwards(u8, info.health_condition[0..condition.len], condition);
+    info.health_condition_len = condition.len;
+    try std.testing.expectEqualStrings(condition, displayHealthSlice(&info));
 }
 
 test "enable verification waits for charging only when it should" {
